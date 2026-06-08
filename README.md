@@ -2,6 +2,9 @@
 
 Minimal React + Vite + TypeScript template wired to the Host API for product-account access from Polkadot Desktop. A starting point for building Polkadot dapps.
 
+> [!WARNING]
+> The following is a prototype, reference implementation, and proof-of-concept. This open source code is provided for research, experimentation, and developer education only. This code has not been audited, is actively experimental, and may contain bugs, vulnerabilities, or incomplete features. Use at your own risk.
+
 A live deployment runs at [**playground.dot.li**](https://playground.dot.li) — open it inside Polkadot Desktop to see the template connect to the Host API, surface the app-scoped product account's SS58 + EVM (H160) addresses, and sign a message end-to-end.
 
 ## Mod it
@@ -91,3 +94,21 @@ dot deploy --no-build --buildDir dist --domain <name>.dot --signer phone --playg
 - Add an on-chain leaderboard
 - Add Statement Store notifications
 - Add a tipping mechanic using PGAS
+
+## Security
+
+This is a reference proof-of-concept, **not a hardened production build**. Before
+deploying it for any real use case, you are responsible for:
+
+- Reviewing the code yourself.
+- Checking that dependencies are up to date and free of known vulnerabilities.
+- Securing your own fork or deployment environment (keys, secrets, network configuration).
+- Tracking the latest tagged release / commits for security fixes — older releases
+  are not backported (exceptions might apply).
+
+For Parity's security disclosure process and Bug Bounty program, see
+[parity.io/bug-bounty](https://parity.io/bug-bounty).
+
+## License
+
+Licensed under the [GNU General Public License v3.0 or later](./LICENSE) (`GPL-3.0-or-later`).
