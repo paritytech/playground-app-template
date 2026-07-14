@@ -1,6 +1,11 @@
 import { useSyncExternalStore } from "react";
-import { enumValue, getTruApi } from "@parity/product-sdk-host";
-import { AllocatableResource, AllocationOutcome, type CodecType } from "@novasamatech/host-api";
+import {
+    HostUnavailableError,
+    navigateTo,
+    requestResourceAllocation,
+    type AllocatableResource,
+    type AllocationOutcome,
+} from "@parity/product-sdk-host";
 import {
     AccountNotFoundError,
     SignerManager,
@@ -21,10 +26,10 @@ const RESOURCE_ALLOCATION_REQUESTS = [
     { tag: "BulletinAllowance", value: undefined },
     { tag: "SmartContractAllowance", value: PRODUCT_ACCOUNT_DERIVATION_INDEX },
     { tag: "AutoSigning", value: undefined },
-] as const satisfies ReadonlyArray<CodecType<typeof AllocatableResource>>;
+] as const satisfies ReadonlyArray<AllocatableResource>;
 
-export type ResourceAllocationKind = CodecType<typeof AllocatableResource>["tag"];
-export type ResourceAllocationOutcome = CodecType<typeof AllocationOutcome>["tag"];
+export type ResourceAllocationKind = AllocatableResource["tag"];
+export type ResourceAllocationOutcome = AllocationOutcome;
 
 export interface ResourceAllocationEntry {
     resource: ResourceAllocationKind;
@@ -200,36 +205,27 @@ class ProductAccountSignerManager {
             error: null,
         });
 
-        const truApi = await getTruApi();
-        if (!truApi?.requestResourceAllocation) {
-            const nextState: ResourceAllocationState = {
-                status: "unavailable",
-                entries: requestedEntries,
-                error: "Host does not expose requestResourceAllocation",
-            };
-            this.setResourceAllocationState(nextState);
-            return nextState;
-        }
-
         try {
-            const response = await truApi.requestResourceAllocation(
-                enumValue("v1", [...RESOURCE_ALLOCATION_REQUESTS]),
-            );
-            if (response.isErr()) {
+            const response = await requestResourceAllocation([...RESOURCE_ALLOCATION_REQUESTS]);
+            if (!response.ok) {
+                // Outside a host container the flat helper returns
+                // HostUnavailableError; surface that as "unavailable" and any
+                // other host failure as "error".
+                const unavailable = response.error instanceof HostUnavailableError;
                 const nextState: ResourceAllocationState = {
-                    status: "error",
+                    status: unavailable ? "unavailable" : "error",
                     entries: requestedEntries,
-                    error: response.error.value.message,
+                    error: response.error.message,
                 };
                 this.setResourceAllocationState(nextState);
                 return nextState;
             }
-            const outcomes = response.value.value;
+            const outcomes = response.value;
             const nextState: ResourceAllocationState = {
                 status: "complete",
                 entries: RESOURCE_ALLOCATION_REQUESTS.map((request, index) => ({
                     resource: request.tag,
-                    outcome: outcomes[index]?.tag ?? "NotAvailable",
+                    outcome: outcomes[index] ?? "NotAvailable",
                 })),
                 error: null,
             };
@@ -306,14 +302,9 @@ export async function openExternalLink(url: string) {
         window.open(url, "_blank");
         return;
     }
-    const truApi = await getTruApi();
-    if (!truApi) {
-        window.open(url, "_blank");
-        return;
-    }
     try {
-        const result = await truApi.navigateTo(enumValue("v1", url));
-        if (result.isErr()) window.open(url, "_blank");
+        const result = await navigateTo(url);
+        if (!result.ok) window.open(url, "_blank");
     } catch {
         window.open(url, "_blank");
     }
