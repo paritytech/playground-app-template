@@ -5,7 +5,10 @@ import {
     requestResourceAllocation,
     type AllocatableResource,
     type AllocationOutcome,
+    type HostError,
 } from "@parity/product-sdk-host";
+import { isSigningRejection } from "@parity/product-sdk-tx";
+import { configure, createLogger } from "@parity/product-sdk-logger";
 import {
     AccountNotFoundError,
     SignerManager,
@@ -21,6 +24,30 @@ import {
 const DEFAULT_PRODUCT_ACCOUNT_DOT_NS = "playground.dot";
 const PRODUCT_ACCOUNT_DERIVATION_INDEX = 0;
 
+// Scoped diagnostic logging — a pattern worth keeping in a template. Only this
+// namespace drops to "debug"; every other product-sdk logger stays at "warn",
+// so you get detail where you want it without global noise (tune the namespace
+// / level below to taste). Here it captures the raw truapi payload for each
+// resource-allocation outcome (success, phone rejection, Desktop dialog cancel)
+// — handy for debugging your own flows and for reporting host gaps, e.g. a
+// Desktop cancel currently arriving as an indistinguishable Unknown{reason}.
+const allowanceLog = createLogger("playground:allowance");
+// Dev only: raise this namespace to "debug" so info/debug entries show while
+// developing. In production it stays at the "warn" default, so end users' of
+// apps built from this template don't get debug logs in their console.
+if (import.meta.env.DEV) {
+    configure({ level: "debug", namespaces: ["playground:allowance"] });
+}
+
+// The structured truapi error payload rides on HostCallFailedError as `payload`
+// ({ tag, value?: { reason } }); pull it out for logging without depending on
+// the class (avoids narrowing gymnastics).
+function rawErrorPayload(error: unknown): unknown {
+    return error && typeof error === "object" && "payload" in error
+        ? (error as { payload: unknown }).payload
+        : undefined;
+}
+
 const RESOURCE_ALLOCATION_REQUESTS = [
     { tag: "StatementStoreAllowance", value: undefined },
     { tag: "BulletinAllowance", value: undefined },
@@ -31,13 +58,35 @@ const RESOURCE_ALLOCATION_REQUESTS = [
 export type ResourceAllocationKind = AllocatableResource["tag"];
 export type ResourceAllocationOutcome = AllocationOutcome;
 
+// Classify a failed allocation. isSigningRejection (product-sdk-tx, the same
+// helper playground-app uses) keys off the error message — "cancelled",
+// "rejected", "denied", "user refused" — so we surface a user decline distinctly
+// from a genuine failure instead of showing a bare "failed".
+//
+// Caveat: truapi's ResourceAllocationError is a single catch-all variant
+// ({ tag: "Unknown", value: { reason } }), so this only lands as "rejected" when
+// the host's reason string carries one of those keywords. A reason like
+// "Unknown error occurred" won't match and falls through to "error".
+function classifyResourceAllocationError(error: HostError): {
+    status: "unavailable" | "rejected" | "error";
+    message: string;
+} {
+    if (error instanceof HostUnavailableError) {
+        return { status: "unavailable", message: "Host unavailable — open this app inside a Polkadot host." };
+    }
+    if (isSigningRejection(error)) {
+        return { status: "rejected", message: "You declined the allowance request." };
+    }
+    return { status: "error", message: error.message };
+}
+
 export interface ResourceAllocationEntry {
     resource: ResourceAllocationKind;
     outcome: ResourceAllocationOutcome | null;
 }
 
 export interface ResourceAllocationState {
-    status: "idle" | "requesting" | "complete" | "unavailable" | "error";
+    status: "idle" | "requesting" | "complete" | "unavailable" | "rejected" | "error";
     entries: readonly ResourceAllocationEntry[];
     error: string | null;
 }
@@ -208,30 +257,49 @@ class ProductAccountSignerManager {
         try {
             const response = await requestResourceAllocation([...RESOURCE_ALLOCATION_REQUESTS]);
             if (!response.ok) {
-                // Outside a host container the flat helper returns
-                // HostUnavailableError; surface that as "unavailable" and any
-                // other host failure as "error".
-                const unavailable = response.error instanceof HostUnavailableError;
+                // Distinguish "outside a host" (unavailable), a user decline
+                // (rejected) and a genuine failure (error) — see
+                // classifyResourceAllocationError.
+                const { status, message } = classifyResourceAllocationError(response.error);
+                // Log the raw shape so the three failure paths (phone rejection
+                // vs. Desktop dialog cancel vs. real error) can be told apart in
+                // a host-gap report: `payload.value.reason` is the only field
+                // that differs, and `classifiedAs: "rejected"` shows whether our
+                // keyword heuristic caught it.
+                allowanceLog.warn("resource allocation failed", {
+                    classifiedAs: status,
+                    errorName: response.error.name,
+                    message: response.error.message,
+                    payload: rawErrorPayload(response.error),
+                });
                 const nextState: ResourceAllocationState = {
-                    status: unavailable ? "unavailable" : "error",
+                    status,
                     entries: requestedEntries,
-                    error: response.error.message,
+                    error: message,
                 };
                 this.setResourceAllocationState(nextState);
                 return nextState;
             }
             const outcomes = response.value;
+            const entries = RESOURCE_ALLOCATION_REQUESTS.map((request, index) => ({
+                resource: request.tag,
+                outcome: outcomes[index] ?? "NotAvailable",
+            }));
+            allowanceLog.info("resource allocation complete", { outcomes: entries });
             const nextState: ResourceAllocationState = {
                 status: "complete",
-                entries: RESOURCE_ALLOCATION_REQUESTS.map((request, index) => ({
-                    resource: request.tag,
-                    outcome: outcomes[index] ?? "NotAvailable",
-                })),
+                entries,
                 error: null,
             };
             this.setResourceAllocationState(nextState);
             return nextState;
         } catch (cause) {
+            allowanceLog.error("resource allocation threw", {
+                errorName: cause instanceof Error ? cause.name : typeof cause,
+                message: cause instanceof Error ? cause.message : String(cause),
+                payload: rawErrorPayload(cause),
+                signingRejection: isSigningRejection(cause),
+            });
             const nextState: ResourceAllocationState = {
                 status: "error",
                 entries: requestedEntries,

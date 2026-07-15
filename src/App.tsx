@@ -86,6 +86,7 @@ const STATUS_LABELS: Record<ResourceAllocationState["status"], string> = {
     requesting: "Requesting",
     complete: "Complete",
     unavailable: "Unavailable",
+    rejected: "Declined",
     error: "Failed",
 };
 
@@ -126,7 +127,7 @@ function ChainBlockPanel() {
 
     return (
         <div className="field">
-            <span className="field-label">Summit Asset Hub block</span>
+            <span className="field-label">Paseo Asset Hub block</span>
             <div className="chain-block">
                 <span className={`chain-dot chain-dot-${status}`} aria-hidden />
                 <span className="mono">{display}</span>

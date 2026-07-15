@@ -67,6 +67,7 @@ header h1 { font-size: 20px; font-weight: 600; }
 .resource-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .resource-status { color: var(--text2); font-size: 12px; }
 .resource-status-complete { color: #34d399; }
+.resource-status-rejected { color: #fbbf24; }
 .resource-status-error, .resource-status-unavailable { color: #f87171; }
 .resource-list { display: flex; flex-direction: column; gap: 8px; }
 .resource-row {
