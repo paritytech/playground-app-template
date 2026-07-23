@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import {
+    getAccountsProvider,
     HostUnavailableError,
     navigateTo,
     requestResourceAllocation,
@@ -11,6 +12,7 @@ import { isSigningRejection } from "@parity/product-sdk-tx";
 import { configure, createLogger } from "@parity/product-sdk-logger";
 import {
     AccountNotFoundError,
+    HostProvider,
     SignerManager,
     SigningFailedError,
     err,
@@ -94,24 +96,42 @@ export interface ResourceAllocationState {
 const INITIAL_RESOURCE_ALLOCATION_ENTRIES: readonly ResourceAllocationEntry[] =
     RESOURCE_ALLOCATION_REQUESTS.map(request => ({ resource: request.tag, outcome: null }));
 
-function isLoopbackHost(hostname: string): boolean {
-    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
-}
-
+// Map the serving URL back to the canonical `<name>.dot` identifier the host
+// derived this app's product account from. This MUST match the host's own
+// derivation: the host enforces account[0] === identifier at signing time, so a
+// mismatch means PermissionDenied on Desktop / a silent signing hang on
+// mobile/web. Override with VITE_PRODUCT_ACCOUNT_ID for anything unusual.
+//
+// Derived structurally rather than from a hardcoded gateway list, so production
+// and test/preview gateways all resolve without a code change:
+//
+//   localhost:5173      → "localhost:5173"  (dev; needs Polkadot Desktop v0.3.2-rc-2+)
+//   app.<name>.dot      → "<name>.dot"      (Desktop serves the `app.` subname)
+//   <name>.dot          → "<name>.dot"      (direct Polkadot Browser navigation)
+//   <name>.<gateway>    → "<name>.dot"      (ANY gateway serves the app from a
+//                                            subdomain whose first label is the
+//                                            product name: dot.li, app.paseo.li,
+//                                            dotli.dev, paseoli.dev, …)
 function getProductAccountIdentifier(): string {
     const configuredIdentifier = import.meta.env.VITE_PRODUCT_ACCOUNT_ID?.trim();
     if (configuredIdentifier) return configuredIdentifier;
 
     const { host, hostname } = window.location;
-    if (isLoopbackHost(hostname)) return host;
+    if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1") return host;
 
-    // dotli exposes hosted products as `<name>.<gateway>` (always 3 hostname
-    // labels: `playground.dot.li`, `playground-sample.paseo.li`, ...). Map
-    // them back to the canonical `<name>.dot` identifier the host signs.
-    const labels = hostname.toLowerCase().split(".");
-    if (labels.length === 3) return `${labels[0]}.dot`;
+    // A `.dot` host is already the identifier; strip Desktop's `app.` subname so
+    // we return the enforced base name.
+    if (hostname.endsWith(".dot")) {
+        const appSubname = /^app\.(.+\.dot)$/.exec(hostname);
+        return appSubname ? appSubname[1] : hostname;
+    }
 
-    if (hostname.endsWith(".dot")) return hostname;
+    // Otherwise it's a gateway serving `<name>.<gateway-domain>`: the product
+    // name is the leading label. Skip IPv4 literals (first label is numeric).
+    const [firstLabel] = hostname.split(".");
+    if (firstLabel && hostname.includes(".") && !/^\d+$/.test(firstLabel)) {
+        return `${firstLabel}.dot`;
+    }
     return DEFAULT_PRODUCT_ACCOUNT_DOT_NS;
 }
 
@@ -138,22 +158,66 @@ class ProductAccountSignerManager {
     private readonly manager = new SignerManager({
         dappName: this.productAccountIdentifier,
         ss58Prefix: 42,
+        // Defer the host's ChainSubmit ("broadcast signed transactions to any
+        // Substrate chain") permission. The SDK otherwise requests it eagerly at
+        // connect, prompting the user on load — but this app only signs raw
+        // messages and never submits transactions, so we skip that prompt. If you
+        // add a chain write, request ChainSubmit lazily on that path first.
+        createProvider: type =>
+            type === "host"
+                ? new HostProvider({ ss58Prefix: 42, requestChainSubmitPermission: false })
+                : new HostProvider(),
     });
     private readonly subscribers = new Set<(state: SignerState) => void>();
     private readonly resourceSubscribers = new Set<(state: ResourceAllocationState) => void>();
     private state = initialState();
     private resourceAllocationState = initialResourceAllocationState();
     private connectPromise: Promise<Result<SignerAccount[], SignerError>> | null = null;
+    private disposed = false;
+    private readonly teardowns: Array<() => void> = [];
 
     constructor() {
         // connecting/connected transitions are owned by connect() since the wrapper
         // exposes a derived product account. Only mirror mid-session disconnects, and
         // guard against re-firing when connectInner already set disconnected.
-        this.manager.subscribe(underlyingState => {
-            if (underlyingState.status === "disconnected" && this.state.status !== "disconnected") {
-                this.transitionToDisconnected(underlyingState.error);
+        this.teardowns.push(
+            this.manager.subscribe(underlyingState => {
+                if (underlyingState.status === "disconnected" && this.state.status !== "disconnected") {
+                    this.transitionToDisconnected(underlyingState.error);
+                }
+            }),
+        );
+        void this.watchHostConnection();
+    }
+
+    // Auto-reconnect: the host reports when a wallet session appears (the user
+    // logs in / pairs a phone) or drops. On the first load the initial connect()
+    // may fail with NotConnected because no wallet is connected yet; when the
+    // user then logs in, this re-derives the product account without a page
+    // reload. Independent of the SignerManager lifecycle (uses the shared host
+    // transport), so it survives connect()'s failure teardown. No-op outside a
+    // host container (getAccountsProvider is null).
+    private async watchHostConnection() {
+        const accounts = await getAccountsProvider();
+        if (!accounts || this.disposed) return;
+        const subscription = accounts.subscribeAccountConnectionStatus(status => {
+            if (status === "Connected") {
+                // connect() is a no-op while already connected or connecting, so
+                // a redundant "Connected" event can't stack duplicate attempts.
+                if (this.state.status === "disconnected") void this.connect();
+            } else if (status === "Disconnected" && this.state.status !== "disconnected") {
+                this.transitionToDisconnected(null);
             }
         });
+        this.teardowns.push(() => subscription.unsubscribe());
+    }
+
+    // Detach long-lived listeners. Called from the HMR dispose hook so a dev
+    // hot-reload doesn't leave the previous singleton's subscriptions attached
+    // (each would keep firing into a dead instance and stack duplicates).
+    dispose() {
+        this.disposed = true;
+        for (const teardown of this.teardowns.splice(0)) teardown();
     }
 
     private transitionToDisconnected(error: SignerError | null) {
@@ -350,6 +414,13 @@ class ProductAccountSignerManager {
 export type { SignerAccount, SignerState };
 
 export const signerManager = new ProductAccountSignerManager();
+
+// Without this, every dev hot-reload constructs a fresh singleton whose
+// subscriptions stack on top of the previous instances' (which never get torn
+// down), so one host event fans out to N stale managers.
+if (import.meta.hot) {
+    import.meta.hot.dispose(() => signerManager.dispose());
+}
 
 export function useSignerState(): SignerState {
     return useSyncExternalStore(

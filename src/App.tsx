@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { truncateAddress } from "@parity/product-sdk-address";
-import { bytesToHex, utf8ToBytes } from "@parity/product-sdk-utils";
+import { bytesToHex, formatPlanck, utf8ToBytes } from "@parity/product-sdk-utils";
+import { isInsideContainerSync } from "@parity/product-sdk-host";
 import {
     signerManager,
     useResourceAllocationState,
@@ -11,12 +12,12 @@ import {
     type ResourceAllocationState,
     type SignerAccount,
 } from "./utils.ts";
-import { useChainBlock } from "./chain.ts";
+import { useChainBlock, useProductAccountChainInfo } from "./chain.ts";
 
 const PLAYGROUND_URL = "https://playground.dot";
 
 export default function App() {
-    const { status, selectedAccount } = useSignerState();
+    const { status, selectedAccount, error } = useSignerState();
 
     useEffect(() => {
         signerManager.connect().then(result => {
@@ -45,9 +46,7 @@ export default function App() {
                 {selectedAccount ? (
                     <AccountPanel account={selectedAccount} />
                 ) : (
-                    <p className="hint">
-                        You need to log into Polkadot first — either view this page within a <strong>Polkadot host</strong> (Desktop or browser), or log in in the preview on RevX.
-                    </p>
+                    <NotConnectedHint error={error?.message ?? null} />
                 )}
                 <ModItCard />
             </main>
@@ -55,14 +54,48 @@ export default function App() {
     );
 }
 
+// Shown when no product account resolved. The bare "log in" message hid whether
+// the app simply isn't in a host vs. connected-but-rejected, so surface both:
+// `Host detected` = is there a Host API here at all (isInsideContainerSync);
+// `dotNS ID` = the identifier we derived from the URL (a wrong one gets the
+// account rejected); `Last error` = the actual connect/getProductAccount failure.
+function NotConnectedHint({ error }: { error: string | null }) {
+    const inHost = isInsideContainerSync();
+    return (
+        <div className="hint">
+            <p>
+                You need to log into Polkadot first — either view this page within a{" "}
+                <strong>Polkadot host</strong> (Desktop or browser), or log in in the preview on RevX.
+            </p>
+            <dl className="diag">
+                <div>
+                    <dt>Host detected</dt>
+                    <dd className="mono">{inHost ? "yes" : "no — not embedded in a Polkadot host"}</dd>
+                </div>
+                <div>
+                    <dt>dotNS ID</dt>
+                    <dd className="mono">{signerManager.productAccountIdentifier}</dd>
+                </div>
+                {error && (
+                    <div>
+                        <dt>Last error</dt>
+                        <dd className="mono">{error}</dd>
+                    </div>
+                )}
+            </dl>
+        </div>
+    );
+}
+
 function AccountPanel({ account }: { account: SignerAccount }) {
     return (
         <div className="panel">
-            <Field label="Product identifier" value={signerManager.productAccountIdentifier} />
+            <Field label="dotNS ID" value={signerManager.productAccountIdentifier} />
             <Field label="SS58 address" value={account.address} />
             <Field label="EVM address (H160)" value={account.h160Address} />
             <ChainBlockPanel />
             <ResourceAllocationPanel />
+            <ProductAccountChainPanel account={account} />
             <SignDemo />
         </div>
     );
@@ -112,6 +145,56 @@ function ResourceAllocationPanel() {
                 ))}
             </div>
             {allocation.error && <p className="error">{allocation.error}</p>}
+        </div>
+    );
+}
+
+// On-chain facts about the product account, surfaced once connected: whether
+// it's mapped for contracts, and its PGAS gas balance. PGAS is only read after
+// the host allowance completes — that's what provisions gas — so before then we
+// nudge the user rather than showing a misleading zero.
+function ProductAccountChainPanel({ account }: { account: SignerAccount }) {
+    const allocation = useResourceAllocationState();
+    const allowanceGranted = allocation.status === "complete";
+    const info = useProductAccountChainInfo(account.address, allowanceGranted);
+
+    const mapped =
+        info.mapped === null
+            ? info.status === "error" ? "unavailable" : "checking…"
+            : info.mapped ? "Yes" : "No — map to use contracts";
+
+    // PGAS is only provisioned once the host grants the allowance. Distinguish
+    // "granted → read it" from a finished-but-denied allowance (declined/failed)
+    // so we don't show "awaiting" forever after the user rejects the prompt.
+    let pgas: string;
+    if (allowanceGranted) {
+        pgas = info.pgas
+            ? `${formatPlanck(info.pgas.planck, info.pgas.decimals)} ${info.pgas.symbol}`
+            : info.status === "error" ? "unavailable" : "loading…";
+    } else if (allocation.status === "rejected") {
+        pgas = "allowance declined";
+    } else if (allocation.status === "error" || allocation.status === "unavailable") {
+        pgas = "allowance unavailable";
+    } else {
+        pgas = "awaiting host allowance"; // idle / requesting
+    }
+
+    return (
+        <div className="resource-panel">
+            <div className="resource-heading">
+                <span className="field-label">Product account on-chain</span>
+            </div>
+            <div className="resource-list">
+                <div className="resource-row">
+                    <span>Account mapped</span>
+                    <span className="mono">{mapped}</span>
+                </div>
+                <div className="resource-row">
+                    <span>PGAS balance</span>
+                    <span className="mono">{pgas}</span>
+                </div>
+            </div>
+            {info.error && <p className="error">{info.error}</p>}
         </div>
     );
 }

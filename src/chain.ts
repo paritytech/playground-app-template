@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { createChainClient } from "@parity/product-sdk-chain-client";
 import { isChainSupported } from "@parity/product-sdk-host";
+import { ss58ToH160 } from "@parity/product-sdk-address";
 import { paseo_asset_hub } from "@parity/product-sdk-descriptors/paseo-asset-hub";
 
 // How long to wait for the first block before giving up. The host relays chain
@@ -108,6 +109,96 @@ export function useChainBlock(): ChainBlockState {
             client?.destroy();
         };
     }, []);
+
+    return state;
+}
+
+// PGAS balance, as held on Paseo Asset Hub. PGAS is the Hub's gas/fee token —
+// `Pgas.PgasAssetId` is its asset id and the balance lives in `Assets.Account`.
+export interface PgasBalance {
+    /** Raw balance in the token's smallest unit. */
+    planck: bigint;
+    /** Token decimals, from `Assets.Metadata` — pass to formatPlanck. */
+    decimals: number;
+    /** Token symbol, from `Assets.Metadata` (e.g. "PGAS"). */
+    symbol: string;
+}
+
+export interface ProductAccountChainInfo {
+    status: "idle" | "loading" | "ready" | "error";
+    // Is the account's H160 registered in `Revive.OriginalAccount`? Mapping is a
+    // prerequisite for any PolkaVM/EVM contract call on Asset Hub. null until known.
+    mapped: boolean | null;
+    // The account's PGAS balance. null until the host allowance is granted (that's
+    // what provisions gas) or if the read is still pending / unavailable.
+    pgas: PgasBalance | null;
+    error: string | null;
+}
+
+// One-shot on-chain reads for the product account on Paseo Asset Hub: whether
+// it's mapped, and — once the host allowance has been granted — its PGAS
+// balance. Reuses the host-routed client that `createChainClient` memoizes (the
+// same one `useChainBlock` opens); it deliberately does NOT destroy that client,
+// since teardown is global and owned by useChainBlock's unmount. Reads are
+// point-in-time (no subscription): mapping and gas provisioning change rarely,
+// and the effect re-runs when `allowanceGranted` flips to pull the PGAS balance.
+export function useProductAccountChainInfo(
+    address: string | null,
+    allowanceGranted: boolean,
+): ProductAccountChainInfo {
+    const [state, setState] = useState<ProductAccountChainInfo>({
+        status: "idle",
+        mapped: null,
+        pgas: null,
+        error: null,
+    });
+
+    useEffect(() => {
+        if (!address) {
+            setState({ status: "idle", mapped: null, pgas: null, error: null });
+            return;
+        }
+        let cancelled = false;
+        setState(prev => ({ ...prev, status: "loading", error: null }));
+
+        (async () => {
+            const client = await createChainClient({ chains: { assetHub: paseo_asset_hub } });
+            if (cancelled) return;
+            const api = client.assetHub;
+
+            const mappedTo = await api.query.Revive.OriginalAccount.getValue(ss58ToH160(address));
+            if (cancelled) return;
+
+            let pgas: PgasBalance | null = null;
+            if (allowanceGranted) {
+                const assetId = await api.constants.Pgas.PgasAssetId();
+                const [account, metadata] = await Promise.all([
+                    api.query.Assets.Account.getValue(assetId, address),
+                    api.query.Assets.Metadata.getValue(assetId),
+                ]);
+                if (cancelled) return;
+                pgas = {
+                    planck: account?.balance ?? 0n,
+                    decimals: metadata.decimals,
+                    symbol: new TextDecoder().decode(metadata.symbol),
+                };
+            }
+
+            setState({ status: "ready", mapped: mappedTo !== undefined, pgas, error: null });
+        })().catch(cause => {
+            if (cancelled) return;
+            setState({
+                status: "error",
+                mapped: null,
+                pgas: null,
+                error: cause instanceof Error ? cause.message : String(cause),
+            });
+        });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [address, allowanceGranted]);
 
     return state;
 }
