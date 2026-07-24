@@ -14,8 +14,8 @@ const FIRST_BLOCK_TIMEOUT_MS = 12_000;
 // network is hardcoded to Paseo: the descriptor's genesis hash is what selects
 // the chain (there are no endpoints/URLs to configure), and importing only
 // paseo_asset_hub keeps the build to a single metadata chunk. The host must
-// support the chosen chain's genesis hash — Summit is not enabled in current
-// host builds, so it rejects with "Chain ... is not supported".
+// support the chosen chain's genesis hash — a chain the host build doesn't
+// enable rejects with "Chain ... is not supported".
 export interface ChainBlockState {
     status: "connecting" | "live" | "error";
     block: number | null;
