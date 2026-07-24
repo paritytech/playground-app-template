@@ -2,20 +2,57 @@ import { useEffect, useState } from "react";
 import { createChainClient } from "@parity/product-sdk-chain-client";
 import { isChainSupported } from "@parity/product-sdk-host";
 import { ss58ToH160 } from "@parity/product-sdk-address";
-import { paseo_asset_hub } from "@parity/product-sdk-descriptors/paseo-asset-hub";
+import type { devnet_asset_hub } from "@parity/product-sdk-descriptors/devnet-asset-hub";
+import type { paseo_asset_hub } from "@parity/product-sdk-descriptors/paseo-asset-hub";
 
 // How long to wait for the first block before giving up. The host relays chain
 // reads, so a chain that's enabled but not serving blocks would otherwise hang
 // on "connecting" forever.
 const FIRST_BLOCK_TIMEOUT_MS = 12_000;
 
-// Demo chain read: subscribe to Paseo Asset Hub's current block number through
-// the sanctioned chain-client (host-routed — never a direct RPC endpoint). The
-// network is hardcoded to Paseo: the descriptor's genesis hash is what selects
-// the chain (there are no endpoints/URLs to configure), and importing only
-// paseo_asset_hub keeps the build to a single metadata chunk. The host must
-// support the chosen chain's genesis hash — a chain the host build doesn't
-// enable rejects with "Chain ... is not supported".
+// Demo chain read: subscribe to the sample network's current block number
+// through the sanctioned chain-client (host-routed — never a direct RPC
+// endpoint). The descriptor's genesis hash is what selects the chain (there
+// are no endpoints/URLs to configure), and loading the descriptor dynamically
+// keeps each build to a single metadata chunk. The host must support the
+// chosen chain's genesis hash — a chain the host build doesn't enable rejects
+// with "Chain ... is not supported".
+//
+// Networks: "devnet" (default) is the public products devnet on the Paseo
+// testnet Asset Hub (para 1000). "paseo-next" is the Paseo Next v2 preview
+// network (para 1500) — that's what the CDM `paseo` preset targets, NOT the
+// Paseo testnet. Select with VITE_NETWORK (see .env.example).
+
+type DemoDescriptor = typeof devnet_asset_hub | typeof paseo_asset_hub;
+
+interface NetworkConfig {
+    label: string;
+    loadDescriptor(): Promise<DemoDescriptor>;
+}
+
+const NETWORKS: Record<"devnet" | "paseo-next", NetworkConfig> = {
+    devnet: {
+        label: "Devnet Asset Hub",
+        loadDescriptor: async () =>
+            (await import("@parity/product-sdk-descriptors/devnet-asset-hub")).devnet_asset_hub,
+    },
+    "paseo-next": {
+        label: "Paseo Next Asset Hub",
+        loadDescriptor: async () =>
+            (await import("@parity/product-sdk-descriptors/paseo-asset-hub")).paseo_asset_hub,
+    },
+};
+
+function resolveNetwork(): NetworkConfig {
+    const raw = (import.meta.env.VITE_NETWORK ?? "").trim().toLowerCase();
+    if (raw === "paseo" || raw === "paseo-next") return NETWORKS["paseo-next"];
+    if (raw && raw !== "devnet") {
+        console.warn(`[Chain] Unknown VITE_NETWORK "${raw}", falling back to devnet`);
+    }
+    return NETWORKS.devnet;
+}
+
+export const NETWORK = resolveNetwork();
 export interface ChainBlockState {
     status: "connecting" | "live" | "error";
     block: number | null;
@@ -33,7 +70,6 @@ export function useChainBlock(): ChainBlockState {
         let cancelled = false;
         let client: { destroy(): void } | null = null;
         let subscription: { unsubscribe(): void } | null = null;
-        const genesis = paseo_asset_hub.genesis as `0x${string}`;
 
         const setBlock = (value: number) => {
             if (!cancelled) setState({ status: "live", block: value, error: null });
@@ -56,12 +92,18 @@ export function useChainBlock(): ChainBlockState {
             fail(
                 new Error(
                     "Timed out waiting for a block. The host may not serve this chain " +
-                        `(genesis ${genesis}).`,
+                        `(${NETWORK.label}).`,
                 ),
             );
         }, FIRST_BLOCK_TIMEOUT_MS);
 
         (async () => {
+            const descriptor = await NETWORK.loadDescriptor();
+            const genesis = descriptor.genesis as `0x${string}` | undefined;
+            if (!genesis) {
+                throw new Error(`${NETWORK.label} descriptor is missing its genesis hash.`);
+            }
+
             // The host relays chain reads and only serves chains enabled in its
             // build. Probe support first so an unsupported chain fails fast with
             // a clear message instead of hanging.
@@ -69,11 +111,11 @@ export function useChainBlock(): ChainBlockState {
             if (cancelled) return;
             if (supported.ok && !supported.value) {
                 throw new Error(
-                    `Host does not support Paseo Asset Hub (genesis ${genesis}).`,
+                    `Host does not support ${NETWORK.label} (genesis ${genesis}).`,
                 );
             }
 
-            const chainClient = await createChainClient({ chains: { assetHub: paseo_asset_hub } });
+            const chainClient = await createChainClient({ chains: { assetHub: descriptor } });
             if (cancelled) {
                 chainClient.destroy();
                 return;
@@ -113,7 +155,7 @@ export function useChainBlock(): ChainBlockState {
     return state;
 }
 
-// PGAS balance, as held on Paseo Asset Hub. PGAS is the Hub's gas/fee token —
+// PGAS balance, as held on the sample network's Asset Hub. PGAS is the Hub's gas/fee token —
 // `Pgas.PgasAssetId` is its asset id and the balance lives in `Assets.Account`.
 export interface PgasBalance {
     /** Raw balance in the token's smallest unit. */
@@ -135,7 +177,7 @@ export interface ProductAccountChainInfo {
     error: string | null;
 }
 
-// One-shot on-chain reads for the product account on Paseo Asset Hub: whether
+// One-shot on-chain reads for the product account on the sample Asset Hub: whether
 // it's mapped, and — once the host allowance has been granted — its PGAS
 // balance. Reuses the host-routed client that `createChainClient` memoizes (the
 // same one `useChainBlock` opens); it deliberately does NOT destroy that client,
@@ -162,7 +204,7 @@ export function useProductAccountChainInfo(
         setState(prev => ({ ...prev, status: "loading", error: null }));
 
         (async () => {
-            const client = await createChainClient({ chains: { assetHub: paseo_asset_hub } });
+            const client = await createChainClient({ chains: { assetHub: await NETWORK.loadDescriptor() } });
             if (cancelled) return;
             const api = client.assetHub;
 

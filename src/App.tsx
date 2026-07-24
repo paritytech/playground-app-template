@@ -12,7 +12,7 @@ import {
     type ResourceAllocationState,
     type SignerAccount,
 } from "./utils.ts";
-import { useChainBlock, useProductAccountChainInfo } from "./chain.ts";
+import { NETWORK, useChainBlock, useProductAccountChainInfo } from "./chain.ts";
 
 const PLAYGROUND_URL = "https://playground.dot";
 
@@ -210,7 +210,7 @@ function ChainBlockPanel() {
 
     return (
         <div className="field">
-            <span className="field-label">Paseo Asset Hub block</span>
+            <span className="field-label">{NETWORK.label} block</span>
             <div className="chain-block">
                 <span className={`chain-dot chain-dot-${status}`} aria-hidden />
                 <span className="mono">{display}</span>
