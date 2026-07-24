@@ -12,24 +12,22 @@
   },
   "dependencies": {
     "@parity/product-sdk-address": "^0.1.1",
-    "@parity/product-sdk-chain-client": "^0.7.7",
+    "@parity/product-sdk-chain-client": "^0.9.1",
     "@parity/product-sdk-crypto": "^0.1.1",
-    "@parity/product-sdk-descriptors": "^0.6.2",
-    "@parity/product-sdk-host": "^0.12.0",
-    "@parity/product-sdk-keys": "^0.3.13",
+    "@parity/product-sdk-descriptors": "^0.8.0",
+    "@parity/product-sdk-host": "^0.14.1",
+    "@parity/product-sdk-keys": "^0.3.16",
     "@parity/product-sdk-logger": "^0.1.1",
-    "@parity/product-sdk-signer": "^0.9.0",
-    "@parity/product-sdk-storage": "^0.1.5",
-    "@parity/product-sdk-tx": "^0.2.17",
+    "@parity/product-sdk-signer": "^0.11.1",
+    "@parity/product-sdk-tx": "^0.3.2",
     "@parity/product-sdk-utils": "^0.1.1",
     "polkadot-api": "^2.1.6",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
-  "_comment_overrides": "@polkadot-api/json-rpc-provider override is a workaround for an upstream packaging bug (mirrors what product-sdk's monorepo does). As of product-sdk-host@0.12.0 the Host API is @parity/truapi (pulled in transitively via product-sdk-host); the old @novasamatech/host-api* packages are gone — app code imports the host types/helpers from @parity/product-sdk-host, which re-exports them from @parity/truapi. Still verify the Host API connects in Desktop before shipping (if it hangs on 'Polkadot host is not ready', pin an earlier host/signer set). ws pinned ^8.21.0 to clear GHSA-96hv-2xvq-fx4p (DoS) in transitive smoldot/@polkadot deps; drop once upstream ranges move past it.",
+  "_comment_overrides": "@polkadot-api/json-rpc-provider override is a workaround for an upstream packaging bug (mirrors what product-sdk's monorepo does). The Host API is @parity/truapi (pulled in transitively via product-sdk-host); app code imports the host types/helpers from @parity/product-sdk-host, which re-exports them from @parity/truapi. Still verify the Host API connects in Desktop before shipping (if it hangs on 'Polkadot host is not ready', pin an earlier host/signer set). The former ws ^8.21.0 pin (GHSA-96hv-2xvq-fx4p) was dropped: upstream ranges now resolve past it (smoldot pulls ws >= 8.21).",
   "overrides": {
-    "@polkadot-api/json-rpc-provider": "^0.2.0",
-    "ws": "^8.21.0"
+    "@polkadot-api/json-rpc-provider": "^0.2.0"
   },
   "devDependencies": {
     "@types/react": "^19.0.0",
