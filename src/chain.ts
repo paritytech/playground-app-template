@@ -30,29 +30,33 @@ interface NetworkConfig {
     loadDescriptor(): Promise<DemoDescriptor>;
 }
 
-const NETWORKS: Record<"devnet" | "paseo-next", NetworkConfig> = {
-    devnet: {
-        label: "Devnet Asset Hub",
-        loadDescriptor: async () =>
-            (await import("@parity/product-sdk-descriptors/devnet-asset-hub")).devnet_asset_hub,
-    },
-    "paseo-next": {
-        label: "Paseo Next Asset Hub",
-        loadDescriptor: async () =>
-            (await import("@parity/product-sdk-descriptors/paseo-asset-hub")).paseo_asset_hub,
-    },
-};
+// `import.meta.env.VITE_NETWORK` is inlined as a literal at build time, so this
+// comparison folds and the unselected network's ~880 kB metadata chunk is
+// dropped from the bundle. Keep it a direct literal comparison — routing the
+// choice through a lookup table or a normalizing helper leaves both import()s
+// reachable, so the build emits both metadata chunks (~+1 MB in dist/, uploaded
+// to Bulletin on every deploy and never fetched).
+export const NETWORK: NetworkConfig =
+    import.meta.env.VITE_NETWORK === "paseo-next"
+        ? {
+              label: "Paseo Next Asset Hub",
+              loadDescriptor: async () =>
+                  (await import("@parity/product-sdk-descriptors/paseo-asset-hub")).paseo_asset_hub,
+          }
+        : {
+              label: "Devnet Asset Hub",
+              loadDescriptor: async () =>
+                  (await import("@parity/product-sdk-descriptors/devnet-asset-hub")).devnet_asset_hub,
+          };
 
-function resolveNetwork(): NetworkConfig {
-    const raw = (import.meta.env.VITE_NETWORK ?? "").trim().toLowerCase();
-    if (raw === "paseo" || raw === "paseo-next") return NETWORKS["paseo-next"];
-    if (raw && raw !== "devnet") {
+// Dev only: a typo'd VITE_NETWORK silently falls back to devnet, so say so
+// while developing. Kept out of the selection above to preserve the fold.
+if (import.meta.env.DEV) {
+    const raw = import.meta.env.VITE_NETWORK;
+    if (raw && raw !== "devnet" && raw !== "paseo-next") {
         console.warn(`[Chain] Unknown VITE_NETWORK "${raw}", falling back to devnet`);
     }
-    return NETWORKS.devnet;
 }
-
-export const NETWORK = resolveNetwork();
 export interface ChainBlockState {
     status: "connecting" | "live" | "error";
     block: number | null;
@@ -88,11 +92,15 @@ export function useChainBlock(): ChainBlockState {
             );
         };
 
+        // Captured once the descriptor resolves so the timeout can name the
+        // genesis the host failed to serve — the actionable value here.
+        let genesisHash: string | null = null;
+
         const timer = setTimeout(() => {
             fail(
                 new Error(
                     "Timed out waiting for a block. The host may not serve this chain " +
-                        `(${NETWORK.label}).`,
+                        `(${NETWORK.label}${genesisHash ? `, genesis ${genesisHash}` : ""}).`,
                 ),
             );
         }, FIRST_BLOCK_TIMEOUT_MS);
@@ -103,6 +111,7 @@ export function useChainBlock(): ChainBlockState {
             if (!genesis) {
                 throw new Error(`${NETWORK.label} descriptor is missing its genesis hash.`);
             }
+            genesisHash = genesis;
 
             // The host relays chain reads and only serves chains enabled in its
             // build. Probe support first so an unsupported chain fails fast with
