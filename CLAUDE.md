@@ -42,7 +42,8 @@ Other packages worth knowing about for richer apps:
 
 - Setup / skills fetch: [setup.sh](setup.sh) — installs deps and pulls the `@parity/product-sdk` skills into `.claude/skills/`
 - Frontend entry + product account panel: [src/App.tsx](src/App.tsx)
-- Product SDK signer wrapper: [src/utils.ts](src/utils.ts)
+- Product SDK signer wrapper + product-account identifier derivation + host resource allowances: [src/utils.ts](src/utils.ts)
+- Host-routed Paseo Asset Hub reads (block ticker, PGAS balance, Revive mapping): [src/chain.ts](src/chain.ts)
 - Vite + TS config: [vite.config.ts](vite.config.ts), [tsconfig.json](tsconfig.json)
 
 ## Product SDK skills
@@ -77,7 +78,7 @@ the host model in more depth.)
 
 - **Always go through `@parity/product-sdk-*` and the Host API — never escape the host with direct RPC.** Account access, signing, chain reads/writes, and storage all flow through the host-provided product account + Host API. Do **not** add a raw full-node WebSocket/RPC client, a public IPFS/Bulletin gateway fetch, a `polkadot-api` client wired to your own endpoint, or any path that bypasses the host. Those break the permissionless model, leak trust to a server, and won't work inside the host sandbox anyway. If a product-sdk package seems to be missing a capability, surface the gap — don't work around it with a direct-RPC shim. (The `polkadot-product-engineering` skill in `.claude/skills/` enumerates the forbidden dependencies.)
 - `src/utils.ts` intentionally calls `SignerManager.connect("host")` first, then `getProductAccount(productIdentifier, 0)`; the selected account is the app-scoped product account.
-- Product account identifiers must match the host's current app identifier. Localhost uses `window.location.host` (for example `localhost:5173`), `.dot.li` gateway URLs map to `.dot`, and `VITE_PRODUCT_ACCOUNT_ID` can override this.
+- Product account identifiers must match the host's current app identifier, and **the DotNS TLD is network-specific** — the CLI's default env (`paseo-next-v2`) uses `<name>.paseo`; production uses `<name>.dot`. `getProductAccountIdentifier()` in [src/utils.ts](src/utils.ts) derives it: localhost uses `window.location.host` (e.g. `localhost:5173`), a hostname already under a DotNS TLD is used as-is (minus Desktop's `app.` subname), and a gateway URL (`<name>.dot.li`, `<name>.paseoli.dev`, …) maps to `<name>.<tld>` with the TLD inferred from the gateway domain. `VITE_PRODUCT_ACCOUNT_ID` overrides all of it. Getting this wrong makes the host reject the product account — truapi reports it as `DomainNotValid` (distinct from `NotConnected`, which means the user is not logged in).
 - Signed extrinsics (Bulletin uploads, contract calls, etc.) require PAS tokens. Faucets:
   - Asset Hub: https://faucet.polkadot.io/
   - Bulletin: https://paritytech.github.io/polkadot-bulletin-chain/authorizations?tab=faucet
@@ -151,8 +152,9 @@ builds and stores on Bulletin. The CLI populates it from:
   the Detail Page. **Update `README.md` before publishing** so the listing
   reflects the current app.
 - **`--tag <tag>`** — the category used to filter the Apps grid. One of:
-  `social`, `chat`, `defi`, `utility`, `gaming`, `marketplace`, `irl`. Pick the
-  one that fits.
+  `site`, `social`, `chat`, `utility`, `gaming`, `marketplace`, `irl` as of CLI
+  v0.47 (`defi` was removed, `site` added). The list moves — read it off
+  `playground deploy --help` rather than trusting this line. Pick the one that fits.
 - **`--moddable`** — records your fork's GitHub `origin` as the public source
   `repository`, so others can `playground mod` it. Only set this if the `origin`
   is your own public fork.
@@ -163,7 +165,7 @@ the Detail Page.
 
 > **Known limitation:** the current `playground deploy` path does **not** write a
 > custom **name, description, or icon/cover image** into the metadata. The app
-> name is the `<name>.dot` domain, and the Detail Page falls back to a generated
+> name is the registered DotNS domain, and the Detail Page falls back to a generated
 > placeholder image. Setting an icon/cover is only available through the
 > Playground app's owner UI today, not the CLI — don't add template code that
 > claims to upload an image at deploy time.
@@ -171,4 +173,4 @@ the Detail Page.
 ## Slash commands
 
 - `/dev` — set up (deps + skills) and start the dev server in the background.
-- `/deploy <name>` — build and deploy to `<name>.dot` via the `playground` CLI (phone signer).
+- `/deploy <name>` — build and deploy to `<name>.<tld>` via the `playground` CLI (phone signer; TLD depends on the target env, `.paseo` by default).

@@ -2,7 +2,7 @@
 
 This guide walks you through deploying your own instance of the Polkadot
 Playground template: your own frontend on Bulletin Chain, served from your
-own `.dot` name, starting from nothing but a GitHub account, a terminal, and
+own DotNS name, starting from nothing but a GitHub account, a terminal, and
 a phone.
 
 This template ships **frontend-only** by default — if you haven't added a smart
@@ -10,7 +10,7 @@ contract, there's no Rust toolchain or contract build to set up, and one tool
 does all the work:
 
 - **[Playground CLI](https://github.com/paritytech/playground-cli)** (`playground`, short alias `pg`) builds the frontend,
-  uploads it to Bulletin Chain, registers your `.dot` name, and (optionally)
+  uploads it to Bulletin Chain, registers your DotNS name, and (optionally)
   publishes the app to the playground registry so it shows up in the Apps
   grid.
 
@@ -70,7 +70,7 @@ playground login
 
 *What's happening:* `login` asks for a display name, then shows a QR code.
 Scan it with the Polkadot App and approve once: that verifies you via Proof
-of Personhood, pairs a product account (an address like `playground.dot/0`),
+of Personhood, pairs a product account (an address like `playground.paseo/0`),
 and provisions a local session key. Sign out later with `playground logout`.
 
 A warning like `[cloudStorage] checkAuthorization: query failed ...
@@ -87,17 +87,29 @@ npm run build
 *What's happening:* this type-checks and builds the static site into
 `dist/` — the directory the deploy step uploads.
 
-## 4. Deploy to Bulletin and register your `.dot` name
+## 4. Deploy to Bulletin and register your DotNS name
 
 ```sh
 playground deploy --no-build --buildDir dist --domain playground-template --signer phone --playground
 ```
 
-This deploys to `playground-template.dot` (a trailing `.dot` is fine — the CLI
-strips it). One constraint to know: if the name is already taken by someone
-else, the deploy fails and you'll need a different name; `playground-template`
-is 19 characters, comfortably above the 9+ length that avoids the personhood
-requirement for very short names.
+**The TLD comes from the target environment, not from you.** The CLI's default
+env is `paseo-next-v2`, so this registers `playground-template.paseo`; `--env`
+selects another (`polkadot` uses `.dot`). Pass the **bare** name and let the CLI
+append the TLD — check `playground deploy --help` if you need to confirm the
+current default.
+
+This matters beyond the CLI: the frontend derives the same identifier from its
+serving URL to ask the host for the product account, so if the two disagree the
+host rejects the account and the app never connects. `getProductAccountIdentifier()`
+in `src/utils.ts` infers the TLD from the gateway domain
+(`<name>.paseoli.dev` → `<name>.paseo`, `<name>.dot.li` → `<name>.dot`);
+`VITE_PRODUCT_ACCOUNT_ID` overrides it for anything unusual.
+
+One constraint to know: if the name is already taken by someone else, the deploy
+fails and you'll need a different name; `playground-template` is 19 characters,
+comfortably above the 9+ length that avoids the personhood requirement for very
+short names.
 
 Want your fork to be moddable by others? Add `--moddable` (requires
 `--playground` and a public GitHub `origin` — your fork):
@@ -131,11 +143,12 @@ Between the first two approvals there is a deliberate ~60-second pause
 
 1. uploads the `dist/` assets + app metadata to **Bulletin Chain**
    (decentralized storage, no server anywhere),
-2. registers your **`.dot` domain** via DotNS and points it at the upload,
+2. registers your **DotNS domain** via DotNS and points it at the upload,
 3. publishes the app to the **playground registry**, which puts it in the
    playground's Apps grid,
-4. prints the result: your live URL (`https://playground-template.dot.li`, or
-   `playground-template.dot` inside a Polkadot host — Mobile, Desktop, or Web)
+4. prints the result: your live URL (`https://playground-template.paseoli.dev`,
+   or `playground-template.paseo` inside a Polkadot host — Mobile, Desktop, or
+   Web; the gateway host mirrors the TLD, `.dot` names serve from `dot.li`)
    plus the app, IPFS, and metadata CIDs.
 
 ### What shows on your app's listing
@@ -145,13 +158,15 @@ JSON the publish step builds from your project:
 
 - Your **`README.md`** is inlined into the metadata (capped in size) and
   rendered on the Detail Page — so **update `README.md` before you publish**.
-- The **tag** (`--tag <tag>`, one of `social`, `chat`, `defi`, `utility`,
-  `gaming`, `marketplace`, `irl`) is the category used to filter the grid. If
-  you omit the flag the CLI prompts you to pick one.
+- The **tag** (`--tag <tag>`) is the category used to filter the grid. As of CLI
+  v0.47 the choices are `site`, `social`, `chat`, `utility`, `gaming`,
+  `marketplace`, `irl` — the list moves (`defi` was removed, `site` added), so
+  read it off `playground deploy --help`. If you omit the flag the CLI prompts
+  you to pick one.
 - With `--moddable`, your fork's public GitHub URL is recorded as the source
   `repository`.
 
-The app's **name is the `<name>.dot` domain** itself; the current publish path
+The app's **name is the registered domain** itself; the current publish path
 does not take a custom name, description, or icon/cover image, so the Detail
 Page shows a generated placeholder image. Re-deploy after editing `README.md`
 to refresh the listing.
@@ -179,11 +194,11 @@ account, with no phone approvals. Two things to know:
 
 ## 5. Verify
 
-- Open `https://playground-template.dot.li` in a **plain browser**: your app,
+- Open `https://playground-template.paseoli.dev` in a **plain browser**: your app,
   served from Bulletin. The page renders, but Host API login and the
   product-account panel only light up inside a Polkadot host (next bullet) — a
   plain tab has no host to talk to.
-- Open `playground-template.dot` inside a **Polkadot host** (Mobile, Desktop, or Web). On
+- Open `playground-template.paseo` inside a **Polkadot host** (Mobile, Desktop, or Web). On
   Desktop/Web **hard-refresh** (Cmd+Shift+R / Ctrl+Shift+R) — the browser may
   serve a cached copy of a previous deploy. You should see the template
   connect to the Host API and surface the app-scoped product account's SS58 +
@@ -248,12 +263,16 @@ CLI build for you.
 |---|---|
 | `error: unknown command 'login'` or `'init'` | login is `playground login` in current CLI versions; there is no `init` |
 | `[cloudStorage] ... DisjointError` after login | observed as harmless when it appears after `✓ setup complete`; proceed |
-| `Domain <name>.dot is already registered` | first come, first served; pick a different name (re-deploying a domain you own yourself is fine) |
-| `<name>.dot requires ProofOfPersonhoodFull, but this signer is NoStatus` | the name is too short to be open to all accounts; pick a longer one (9+ characters) |
+| `Domain <name>.<tld> is already registered` | first come, first served; pick a different name (re-deploying a domain you own yourself is fine) |
+| `<name>.<tld> requires ProofOfPersonhoodFull, but this signer is NoStatus` | the name is too short to be open to all accounts; pick a longer one (9+ characters) |
 | `--moddable` rejected / preflight shows the upstream repo as the source | `--moddable` needs a public GitHub `origin` that is **your fork**; `git remote set-url origin <your fork URL>` |
 | Deploy pauses ~60s after the first phone approval | DotNS's mandatory commit-reveal wait (front-running protection), not a hang |
 | No QR code or notification during deploy | expected for `--signer phone`: open the Polkadot App yourself; pending approvals appear inside the app |
 | Deploy fails at the upload step with a `Payment` / allowance error | no Bulletin storage allowance; use the Bulletin faucet (see step 4's mnemonic notes), then re-run |
-| App loads but shows no product account in a plain desktop browser | expected: Host API access flows through the host. Open it inside Polkadot Desktop/Mobile, or via its `.dot.li` URL |
-| `<name>.dot.li` returns a generic Polkadot page to curl/scripts | the gateway serves a client-side resolver shell; only a real browser renders your app |
-| Opened `<name>.dot` and saw the old version | hard-refresh (Cmd+Shift+R / Ctrl+Shift+R); the browser cached the previous deploy |
+| `playground status` says "Log in first" even though you're signed in on your phone | the CLI keeps its **own** session, separate from the host/phone one. Run `playground login` and scan the QR; logging out and back in on the phone does not pair the CLI |
+| App sits on "connecting" forever, log shows `Domain → V1 → NotConnected` | truapi's `NotConnected` means **"user is not logged in"** as far as the *host* is concerned — on Desktop/Web that means no paired Polkadot Mobile session. Distinct from `DomainNotValid`, which is the identifier being wrong |
+| App connects but the host rejects the product account with `DomainNotValid` | the identifier the frontend derived doesn't match the registered domain — usually a TLD mismatch (`.dot` vs `.paseo`). Check the "dotNS ID" in the account panel against your deployed name, and set `VITE_PRODUCT_ACCOUNT_ID` to override |
+| Need to see what the host is actually doing | append `?debug` to the app URL: it raises every product-sdk namespace to debug (not just the template's own) and prints the `signer:host` / truapi exchange. Works on deployed builds too |
+| App loads but shows no product account in a plain desktop browser | expected: Host API access flows through the host. Open it inside Polkadot Desktop/Mobile, or via its gateway URL |
+| The gateway URL returns a generic Polkadot page to curl/scripts | the gateway serves a client-side resolver shell; only a real browser renders your app |
+| Opened your domain and saw the old version | hard-refresh (Cmd+Shift+R / Ctrl+Shift+R); the browser cached the previous deploy |

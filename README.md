@@ -6,7 +6,9 @@
 
 Minimal React + Vite + TypeScript template wired to the Host API for product-account access from a Polkadot host (Mobile, Desktop, or Web). A starting point for building Polkadot dapps.
 
-A live deployment runs at [**playground.dot.li**](https://playground.dot.li) — open it inside a Polkadot host (Mobile, Desktop, or Web) to see the template connect to the Host API, surface the app-scoped product account's SS58 + EVM (H160) addresses, and sign a message end-to-end. Signing is approved on Polkadot Mobile — Desktop and Web relay the request to your paired phone.
+A live deployment runs at [**playground-template.paseoli.dev**](https://playground-template.paseoli.dev) — open it inside a Polkadot host (Mobile, Desktop, or Web) to see the template connect to the Host API, surface the app-scoped product account's SS58 + EVM (H160) addresses, and sign a message end-to-end. Signing is approved on Polkadot Mobile — Desktop and Web relay the request to your paired phone.
+
+Beyond signing, the template demonstrates host-routed chain reads on **Paseo Asset Hub**: a live finalized-block ticker, plus an on-chain panel for the product account showing its PGAS balance and whether it's mapped for contract calls (`Revive.OriginalAccount`). It also negotiates host resource allowances (Statement Store, Bulletin, smart contracts, auto-signing) on connect and reconnects automatically when you log in on the host.
 
 ## Mod it
 
@@ -16,14 +18,14 @@ This repo is meant to be forked, gutted, and turned into your own dapp. The piec
 - **App shell** ([src/App.tsx](src/App.tsx), [src/App.css](src/App.css)) — header, layout, and theme are intentionally tiny so you can rip them out. The `#root { max-width: 520px }` cap is just a default; widen or remove it for dashboards / multi-column layouts.
 - **Stack additions** — `@parity/product-sdk-chain-client` for chain RPC, `@parity/product-sdk-bulletin` for off-chain storage, `@parity/product-sdk-contracts` for smart contracts, `@parity/product-sdk-statement-store` for P2P pub/sub. See [CLAUDE.md](CLAUDE.md) for the full stack table.
 
-When you're ready, deploy your fork to your own `<name>.dot` domain (see below) — no servers, no hosting bill.
+When you're ready, deploy your fork to your own DotNS domain (see below) — no servers, no hosting bill.
 
 ## Stack
 
 - **React 19** + **Vite** + **TypeScript**
 - **`@parity/product-sdk-signer`** — Host signer management and app-scoped product-account signing
-- **`@parity/product-sdk-host`** — TruAPI helpers for the Polkadot host (Mobile, Desktop, or Web)
-- **`@novasamatech/host-api`** (+ `@novasamatech/host-api-wrapper`) — TruAPI runtime used underneath the Product SDK packages
+- **`@parity/product-sdk-host`** — Host API helpers for the Polkadot host (Mobile, Desktop, or Web); built on **`@parity/truapi`** (codec 2 — requires a codec-2 host build)
+- **`@parity/product-sdk-chain-client`** (+ `-descriptors`) — host-routed chain reads (no direct RPC), used for the Paseo Asset Hub block + account panel
 
 ## Running
 
@@ -41,25 +43,29 @@ them. (Plain `npm install` also works if you don't want the skills.)
 
 Runs on `http://localhost:5173`. Must be opened inside a **Polkadot host** (Mobile, Desktop, or Web) for Host API login to work; signing is approved on Polkadot Mobile.
 
-Product-account signing is scoped to the host's current app identifier. Local dev uses the current loopback host, e.g. `localhost:5173`; `.dot.li` gateway URLs are mapped back to their `.dot` product id. Set `VITE_PRODUCT_ACCOUNT_ID` when you need an explicit override.
+Product-account signing is scoped to the host's current app identifier, and **the DotNS TLD depends on the network** — the CLI's default env registers `<name>.paseo`, production uses `<name>.dot`. Local dev uses the current loopback host, e.g. `localhost:5173`; gateway URLs (`<name>.dot.li`, `<name>.paseoli.dev`, …) are mapped back to `<name>.<tld>`. Set `VITE_PRODUCT_ACCOUNT_ID` when you need an explicit override.
 
 ## Structure
 
 ```
 src/
 ├── App.tsx       # Header + product account panel + your app shell
-├── utils.ts      # Product SDK signer wrapper + small helpers
+├── utils.ts      # Product SDK signer wrapper + resource allowances + helpers
+├── chain.ts      # Host-routed Paseo Asset Hub reads (block, PGAS, mapping)
 └── main.tsx      # Vite entry
 ```
 
 ## Deploying
 
-A `/deploy <name>` slash command is wired up for Claude Code users — it runs `playground deploy` (the [Playground CLI](https://github.com/paritytech/playground-cli)) against `<name>.dot` using the phone signer. Standalone:
+A `/deploy <name>` slash command is wired up for Claude Code users — it runs `playground deploy` (the [Playground CLI](https://github.com/paritytech/playground-cli)) using the phone signer. Standalone:
 
 ```bash
+playground login    # separate from being signed in on your phone/host
 npm run build
-playground deploy --no-build --buildDir dist --domain <name>.dot --signer phone --playground
+playground deploy --no-build --buildDir dist --domain <name> --signer phone --playground --tag <tag>
 ```
+
+Pass the **bare** name — the CLI appends the TLD for the target env (`.paseo` by default; `--env` selects another). See [DEPLOYMENT.md](DEPLOYMENT.md) for the full walkthrough.
 
 ## Ideas for modding
 

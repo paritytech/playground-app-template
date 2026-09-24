@@ -11,25 +11,32 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@parity/product-sdk-address": "^0.1.1",
-    "@parity/product-sdk-chain-client": "^0.7.7",
+    "@parity/product-sdk-address": "^0.2.0",
+    "@parity/product-sdk-chain-client": "^0.12.5",
     "@parity/product-sdk-crypto": "^0.1.1",
-    "@parity/product-sdk-descriptors": "^0.6.2",
-    "@parity/product-sdk-host": "^0.12.0",
-    "@parity/product-sdk-keys": "^0.3.13",
+    "@parity/product-sdk-descriptors": "^0.12.0",
+    "@parity/product-sdk-host": "^0.21.0",
+    "@parity/product-sdk-keys": "^0.3.26",
     "@parity/product-sdk-logger": "^0.1.1",
-    "@parity/product-sdk-signer": "^0.9.0",
-    "@parity/product-sdk-storage": "^0.1.5",
-    "@parity/product-sdk-tx": "^0.2.17",
+    "@parity/product-sdk-local-storage": "0.3.11",
+    "@parity/product-sdk-signer": "^0.14.6",
+    "@parity/product-sdk-tx": "^0.4.9",
     "@parity/product-sdk-utils": "^0.1.1",
     "polkadot-api": "^2.1.6",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
-  "_comment_overrides": "@polkadot-api/json-rpc-provider override is a workaround for an upstream packaging bug (mirrors what product-sdk's monorepo does). As of product-sdk-host@0.12.0 the Host API is @parity/truapi (pulled in transitively via product-sdk-host); the old @novasamatech/host-api* packages are gone — app code imports the host types/helpers from @parity/product-sdk-host, which re-exports them from @parity/truapi. Still verify the Host API connects in Desktop before shipping (if it hangs on 'Polkadot host is not ready', pin an earlier host/signer set). ws pinned ^8.21.0 to clear GHSA-96hv-2xvq-fx4p (DoS) in transitive smoldot/@polkadot deps; drop once upstream ranges move past it.",
+  "_comment_local_storage": "@parity/product-sdk-local-storage is the successor to @parity/product-sdk-storage (same host+browser key-value backend; the API was renamed too, createKvStore/KvStore -> createLocalKvStore/LocalKvStore, so it is not a drop-in for old snippets). It is unused by src/ on purpose — it ships ready for apps built on this template. Pinned EXACTLY, no caret: these packages pin product-sdk-host to a single exact version each, in lockstep, and npm's caret on a 0.3.x range (^0.3.11 := >=0.3.11 <0.4.0) would resolve 0.3.13, which pins host 0.23 -> truapi 0.20 -> wire codec 3. 0.3.11 is the build that pins host 0.21.0, matching the top-level host and keeping the whole tree on the single codec-2 truapi. Bump this only together with product-sdk-host, and re-check the codec.",
+  "_comment_overrides": "@polkadot-api/json-rpc-provider override is a workaround for an upstream packaging bug (mirrors what product-sdk's monorepo does). The Host API is @parity/truapi, pulled in transitively via product-sdk-host; app code imports the host types/helpers from @parity/product-sdk-host, which re-exports them from @parity/truapi. product-sdk-host@0.21 pins truapi ^0.17 — the truapi codec-2 handshake — so the host container must speak codec 2 as well (older hosts are codec 1; if connect hangs on 'Polkadot host is not ready', check the host build's codec before pinning packages back). ws pinned ^8.21.0 to clear GHSA-96hv-2xvq-fx4p (DoS) in transitive smoldot/@polkadot deps; drop once upstream ranges move past it. Both overrides are duplicated under `pnpm.overrides` because pnpm ignores npm's top-level `overrides` — without the copy, `pnpm install` resolves ws@8.20.0 and the CVE stays open for forks that use pnpm.",
   "overrides": {
     "@polkadot-api/json-rpc-provider": "^0.2.0",
     "ws": "^8.21.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "@polkadot-api/json-rpc-provider": "^0.2.0",
+      "ws": "^8.21.0"
+    }
   },
   "devDependencies": {
     "@types/react": "^19.0.0",
