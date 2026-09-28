@@ -12,9 +12,11 @@ import { isSigningRejection } from "@parity/product-sdk-tx";
 import { configure, createLogger } from "@parity/product-sdk-logger";
 import {
     AccountNotFoundError,
+    DevProvider,
     HostProvider,
     SignerManager,
     SigningFailedError,
+    TimeoutError,
     err,
     ok,
     type Result,
@@ -37,8 +39,54 @@ const allowanceLog = createLogger("playground:allowance");
 // Dev only: raise this namespace to "debug" so info/debug entries show while
 // developing. In production it stays at the "warn" default, so end users' of
 // apps built from this template don't get debug logs in their console.
-if (import.meta.env.DEV) {
+//
+// Append `?debug` to the URL to instead raise *every* product-sdk namespace to
+// debug (omitting `namespaces` makes the level global). That's the switch to
+// reach for when the app sits on "connecting": it surfaces the signer:host and
+// truapi traffic, so you can see which host call was issued and never answered.
+// Works in a deployed build too, not just dev — host-only failures rarely
+// reproduce on localhost.
+const debugAllNamespaces =
+    typeof window !== "undefined" && new URLSearchParams(window.location.search).has("debug");
+if (debugAllNamespaces) {
+    configure({ level: "debug" });
+} else if (import.meta.env.DEV) {
     configure({ level: "debug", namespaces: ["playground:allowance"] });
+}
+
+// How long to wait for a host call during connect before giving up. truapi's own
+// per-request deadline is 120s (and the handshake's is 10s), so a host that
+// accepts a request but never answers it leaves the UI on "connecting" for two
+// minutes with nothing on screen. Fail faster and say what stalled — the same
+// reasoning as FIRST_BLOCK_TIMEOUT_MS in chain.ts.
+const HOST_CALL_TIMEOUT_MS = 15_000;
+
+// Race a host call against a deadline. On timeout the underlying promise is
+// abandoned, not cancelled: truapi still settles it later against its own 120s
+// deadline, which is harmless here because connect() is idempotent and a stale
+// resolution can only land after we've already transitioned to disconnected.
+async function withHostTimeout<T>(
+    call: Promise<T>,
+    label: string,
+    onTimeout: () => T,
+): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<T>(resolve => {
+        timer = setTimeout(() => {
+            allowanceLog.warn(
+                `host call "${label}" timed out — the host accepted the request but never ` +
+                    "replied. Check for a pending approval prompt in the Polkadot app, and " +
+                    "reload with ?debug to see the full signer/truapi exchange.",
+                { call: label, timeoutMs: HOST_CALL_TIMEOUT_MS },
+            );
+            resolve(onTimeout());
+        }, HOST_CALL_TIMEOUT_MS);
+    });
+    try {
+        return await Promise.race([call, deadline]);
+    } finally {
+        clearTimeout(timer);
+    }
 }
 
 // The structured truapi error payload rides on HostCallFailedError as `payload`
@@ -53,7 +101,9 @@ function rawErrorPayload(error: unknown): unknown {
 const RESOURCE_ALLOCATION_REQUESTS = [
     { tag: "StatementStoreAllowance", value: undefined },
     { tag: "BulletinAllowance", value: undefined },
-    { tag: "SmartContractAllowance", value: PRODUCT_ACCOUNT_DERIVATION_INDEX },
+    // truapi 0.17 (codec 2): the allowance's derivation index is a tagged
+    // union — `Index` for plain enumerable indices, `Raw` for 32-byte indices.
+    { tag: "SmartContractAllowance", value: { tag: "Index", value: PRODUCT_ACCOUNT_DERIVATION_INDEX } },
     { tag: "AutoSigning", value: undefined },
 ] as const satisfies ReadonlyArray<AllocatableResource>;
 
@@ -96,22 +146,35 @@ export interface ResourceAllocationState {
 const INITIAL_RESOURCE_ALLOCATION_ENTRIES: readonly ResourceAllocationEntry[] =
     RESOURCE_ALLOCATION_REQUESTS.map(request => ({ resource: request.tag, outcome: null }));
 
-// Map the serving URL back to the canonical `<name>.dot` identifier the host
+// DotNS top-level domains a product account can live under. The TLD is
+// network-specific: Paseo registers `<name>.paseo` (see `playground deploy
+// --help`, whose default env is paseo-next-v2), production registers
+// `<name>.dot`. Ordered longest-first is unnecessary here, but keep them
+// distinct — the suffix decides which branch below claims a hostname.
+const DOT_NS_TLDS = ["dot", "paseo"] as const;
+
+// Map the serving URL back to the canonical `<name>.<tld>` identifier the host
 // derived this app's product account from. This MUST match the host's own
 // derivation: the host enforces account[0] === identifier at signing time, so a
-// mismatch means PermissionDenied on Desktop / a silent signing hang on
-// mobile/web. Override with VITE_PRODUCT_ACCOUNT_ID for anything unusual.
+// mismatch means the host rejects the product account (truapi reports it as
+// `DomainNotValid`). Override with VITE_PRODUCT_ACCOUNT_ID for anything unusual.
 //
 // Derived structurally rather than from a hardcoded gateway list, so production
 // and test/preview gateways all resolve without a code change:
 //
-//   localhost:5173      → "localhost:5173"  (dev; needs Polkadot Desktop v0.3.2-rc-2+)
-//   app.<name>.dot      → "<name>.dot"      (Desktop serves the `app.` subname)
-//   <name>.dot          → "<name>.dot"      (direct Polkadot Browser navigation)
-//   <name>.<gateway>    → "<name>.dot"      (ANY gateway serves the app from a
-//                                            subdomain whose first label is the
-//                                            product name: dot.li, app.paseo.li,
-//                                            dotli.dev, paseoli.dev, …)
+//   localhost:5173       → "localhost:5173"  (dev; needs Polkadot Desktop v0.3.2-rc-2+)
+//   app.<name>.<tld>     → "<name>.<tld>"    (Desktop serves the `app.` subname)
+//   <name>.<tld>         → "<name>.<tld>"    (direct Polkadot Browser navigation)
+//   <name>.<gateway>     → "<name>.<tld>"    (ANY gateway serves the app from a
+//                                             subdomain whose first label is the
+//                                             product name: dot.li, dotli.dev,
+//                                             app.paseo.li, paseoli.dev, …)
+//
+// The gateway case can't read the TLD off the hostname, because the gateway
+// domain replaces it (`foo.paseoli.dev` serves `foo.paseo`). We infer it from
+// the gateway domain instead: a Paseo gateway is the one with "paseo" in its
+// name, matching how `paseoli.dev` / `paseo.li` mirror `dot.li` for production.
+// If a future gateway breaks that convention, set VITE_PRODUCT_ACCOUNT_ID.
 function getProductAccountIdentifier(): string {
     const configuredIdentifier = import.meta.env.VITE_PRODUCT_ACCOUNT_ID?.trim();
     if (configuredIdentifier) return configuredIdentifier;
@@ -119,18 +182,21 @@ function getProductAccountIdentifier(): string {
     const { host, hostname } = window.location;
     if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1") return host;
 
-    // A `.dot` host is already the identifier; strip Desktop's `app.` subname so
-    // we return the enforced base name.
-    if (hostname.endsWith(".dot")) {
-        const appSubname = /^app\.(.+\.dot)$/.exec(hostname);
-        return appSubname ? appSubname[1] : hostname;
+    // A hostname already under a DotNS TLD is the identifier; strip Desktop's
+    // `app.` subname so we return the enforced base name.
+    for (const tld of DOT_NS_TLDS) {
+        if (hostname.endsWith(`.${tld}`)) {
+            const appSubname = new RegExp(String.raw`^app\.(.+\.${tld})$`).exec(hostname);
+            return appSubname ? appSubname[1] : hostname;
+        }
     }
 
     // Otherwise it's a gateway serving `<name>.<gateway-domain>`: the product
     // name is the leading label. Skip IPv4 literals (first label is numeric).
-    const [firstLabel] = hostname.split(".");
-    if (firstLabel && hostname.includes(".") && !/^\d+$/.test(firstLabel)) {
-        return `${firstLabel}.dot`;
+    const [firstLabel, ...gatewayLabels] = hostname.split(".");
+    if (firstLabel && gatewayLabels.length > 0 && !/^\d+$/.test(firstLabel)) {
+        const tld = gatewayLabels.join(".").includes("paseo") ? "paseo" : "dot";
+        return `${firstLabel}.${tld}`;
     }
     return DEFAULT_PRODUCT_ACCOUNT_DOT_NS;
 }
@@ -158,15 +224,45 @@ class ProductAccountSignerManager {
     private readonly manager = new SignerManager({
         dappName: this.productAccountIdentifier,
         ss58Prefix: 42,
-        // Defer the host's ChainSubmit ("broadcast signed transactions to any
-        // Substrate chain") permission. The SDK otherwise requests it eagerly at
-        // connect, prompting the user on load — but this app only signs raw
-        // messages and never submits transactions, so we skip that prompt. If you
-        // add a chain write, request ChainSubmit lazily on that path first.
-        createProvider: type =>
-            type === "host"
-                ? new HostProvider({ ss58Prefix: 42, requestChainSubmitPermission: false })
-                : new HostProvider(),
+        // We only override createProvider to set requestChainSubmitPermission
+        // (SignerManager has no option for it). Everything else this factory
+        // builds has to be passed explicitly: SignerManager's *default* factory
+        // injects dappName for us, but supplying createProvider bypasses that
+        // branch entirely, so the provider must declare the app identity itself.
+        // Omitting it is what produces "no productAccount or dappName
+        // configured; resolving connect() with empty accounts" and leaves the
+        // host with no app scope to derive against.
+        //
+        // productAccount is the documented path for an app that signs solely
+        // with its per-app derived account (this template): connect() then
+        // returns that single account directly and populates its name.
+        createProvider: type => {
+            if (type !== "host") return new DevProvider({ ss58Prefix: 42 });
+            return new HostProvider({
+                ss58Prefix: 42,
+                dappName: this.productAccountIdentifier,
+                productAccount: {
+                    dotNsIdentifier: this.productAccountIdentifier,
+                    derivationIndex: PRODUCT_ACCOUNT_DERIVATION_INDEX,
+                    // requestName (default true) additionally calls getUserId() to
+                    // populate the owner name in the header chip. Per the SDK docs
+                    // that triggers a host *identity-permission prompt*, and it runs
+                    // in the same Promise.all as the account fetch — so an unanswered
+                    // prompt stalls the whole connect. If ?debug shows the hang is on
+                    // getUserId, set this to false: the chip then falls back to the
+                    // truncated address and the name can be fetched later on demand.
+                    requestName: true,
+                },
+                // Defer the host's ChainSubmit ("broadcast signed transactions
+                // to any Substrate chain") permission. The SDK otherwise
+                // requests it eagerly at connect, prompting the user on load —
+                // this app only signs raw messages and never submits
+                // transactions. Note the SDK docs warn that without ChainSubmit
+                // the host may reject signing with PermissionDenied; if the sign
+                // demo starts failing that way, drop this line first.
+                requestChainSubmitPermission: false,
+            });
+        },
     });
     private readonly subscribers = new Set<(state: SignerState) => void>();
     private readonly resourceSubscribers = new Set<(state: ResourceAllocationState) => void>();
@@ -272,16 +368,24 @@ class ProductAccountSignerManager {
             error: null,
         });
 
-        const connection = await this.manager.connect("host");
+        const connection = await withHostTimeout(
+            this.manager.connect("host"),
+            "connect",
+            () => err(new TimeoutError("connect", HOST_CALL_TIMEOUT_MS)),
+        );
         if (!connection.ok) {
             this.transitionToDisconnected(connection.error);
             return connection;
         }
         const ownerName = connection.value[0]?.name ?? null;
 
-        const productAccount = await this.manager.getProductAccount(
-            this.productAccountIdentifier,
-            PRODUCT_ACCOUNT_DERIVATION_INDEX,
+        const productAccount = await withHostTimeout(
+            this.manager.getProductAccount(
+                this.productAccountIdentifier,
+                PRODUCT_ACCOUNT_DERIVATION_INDEX,
+            ),
+            "getProductAccount",
+            () => err(new TimeoutError("getProductAccount", HOST_CALL_TIMEOUT_MS)),
         );
         if (!productAccount.ok) {
             // Update our state before tearing down the underlying so the constructor
