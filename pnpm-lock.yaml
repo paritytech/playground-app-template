@@ -4,10 +4,6 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
-overrides:
-  '@polkadot-api/json-rpc-provider': ^0.2.0
-  ws: ^8.21.0
-
 importers:
 
   .:
@@ -1078,8 +1074,8 @@ packages:
     resolution: {integrity: sha512-aSbHV0DaBcr7u0PVHXzM6NbZNAtrr9sF6+Qfs9UUVG7Ll3jQ6hHi8F/xqIIcn2rvIVbr0v/2zyjSdwSV47AgLQ==}
     engines: {node: '>=12'}
 
-  source-map-js@1.2.1:
-    resolution: {integrity: sha512-UXWMKhLOwVKb728IUtQPXxfYU+usdybtUrK/8uGE8CQMvrhOpwvzDBwj0QhSL7MQc7vIsISBG8VQ8+IDQxpfQA==}
+  source-map-js@1.2.2:
+    resolution: {integrity: sha512-KGj/8Y43x35aZVDtt+J4mK1hoLGHULMYfSkODJNQjNDC3oW1PqPoxMwo0pLUsWM/UEGzON/NxeHywEfNXNP3Vw==}
     engines: {node: '>=0.10.0'}
 
   spdx-correct@3.2.0:
@@ -1230,8 +1226,8 @@ packages:
     resolution: {integrity: sha512-uMQTubF/vcu+Wd0b5BGtDmiXePd/+44hUWQz2nZPbs92/BnxRo74tqs+hqDo12RLiEd+CXFKUwxvvIZvtt34Jw==}
     engines: {node: '>=18'}
 
-  ws@8.21.3:
-    resolution: {integrity: sha512-201TZ/kPWxoPr/OKWjquZR1SWKXcvxdH+e1xrx89b3YbmzLMFCLfnaG1HFIgWzJOEWZ7MvpK++odZufgYR50Rw==}
+  ws@8.22.0:
+    resolution: {integrity: sha512-Ydggc987+RO0AnWtZ/7Wq9FtNvcrL1b/RO0ud9mWjUPgDrsAAwQSF51sm2hm1XofbU/4jkpGEsLFsZZxU+1DOg==}
     engines: {node: '>=10.0.0'}
     peerDependencies:
       bufferutil: ^4.0.1
@@ -2131,7 +2127,7 @@ snapshots:
     dependencies:
       nanoid: 3.3.12
       picocolors: 1.1.1
-      source-map-js: 1.2.1
+      source-map-js: 1.2.2
 
   pretty-ms@9.3.0:
     dependencies:
@@ -2250,7 +2246,7 @@ snapshots:
 
   smoldot@3.2.0:
     dependencies:
-      ws: 8.21.3
+      ws: 8.22.0
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -2259,7 +2255,7 @@ snapshots:
     dependencies:
       is-plain-obj: 4.1.0
 
-  source-map-js@1.2.1: {}
+  source-map-js@1.2.2: {}
 
   spdx-correct@3.2.0:
     dependencies:
@@ -2367,6 +2363,6 @@ snapshots:
       type-fest: 4.41.0
       write-json-file: 6.0.0
 
-  ws@8.21.3: {}
+  ws@8.22.0: {}
 
   yoctocolors@2.1.2: {}
